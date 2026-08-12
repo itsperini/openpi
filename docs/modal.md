@@ -43,6 +43,26 @@ The default policy is π0.5 DROID:
 OPENPI_SERVER_ARGS="--env=DROID"
 ```
 
+`OPENPI_APP_NAME` lets several policies coexist in the same Modal workspace. Keep the DROID app as `openpi`, then copy the included LIBERO overlay and deploy it as a separate app:
+
+```bash
+cp .env.libero.example .env.libero
+./scripts/deploy_modal.sh .env.libero
+```
+
+The overlay selects:
+
+```dotenv
+OPENPI_APP_NAME=openpi-libero
+OPENPI_SERVER_ARGS="--env=LIBERO"
+```
+
+Store its returned WebSocket URL separately so it does not replace the DROID endpoint:
+
+```dotenv
+OPENPI_LIBERO_MODAL_ENDPOINT=wss://YOUR-WORKSPACE--openpi-libero-openpi-server.modal.run
+```
+
 Other built-in environments are `ALOHA`, `ALOHA_SIM`, and `LIBERO`. To serve an explicit config and checkpoint, use arguments such as:
 
 ```dotenv
@@ -64,6 +84,8 @@ Deploy with the wrapper that loads the repository-root `.env` file:
 ```bash
 ./scripts/deploy_modal.sh
 ```
+
+An optional first argument is loaded as an environment overlay after `.env`, allowing separate named deployments to share credentials and capacity settings.
 
 The first deployment builds the CUDA/OpenPI image. The first server start also downloads the selected checkpoint into the persistent `openpi-checkpoints` Modal Volume.
 
@@ -96,6 +118,23 @@ policy = websocket_client_policy.WebsocketClientPolicy.from_modal()
 result = policy.infer(observation)
 actions = result["actions"]
 ```
+
+For a Franka Panda in MuJoCo, install the LIBERO runtime and run a short authenticated preview against the separate endpoint:
+
+```bash
+set -a
+source .env
+set +a
+
+python examples/libero/main.py \
+  --modal-endpoint "$OPENPI_LIBERO_MODAL_ENDPOINT" \
+  --task-id 0 \
+  --num-trials-per-task 1 \
+  --max-steps 80 \
+  --display
+```
+
+Press `q` or Escape in the display window to stop the preview. The rollout is also written beneath `data/libero/videos`.
 
 Resize camera images to 224×224 before sending them. Modal limits individual WebSocket messages to 2 MiB.
 

@@ -6,7 +6,7 @@ import subprocess
 
 import modal
 
-APP_NAME = "openpi"
+APP_NAME = os.getenv("OPENPI_APP_NAME", "openpi")
 OPENPI_REPOSITORY = os.getenv("OPENPI_REPOSITORY", "https://github.com/itsperini/openpi.git")
 OPENPI_GIT_REF = os.getenv("OPENPI_GIT_REF", "15a9616a00943ada6c20a0f158e3adb39df2ccac")
 OPENPI_SERVER_ARGS = shlex.split(os.getenv("OPENPI_SERVER_ARGS", "--env=DROID"))

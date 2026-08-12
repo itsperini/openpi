@@ -34,6 +34,19 @@ export SERVER_ARGS="--env LIBERO policy:checkpoint --policy.config pi05_libero -
 export CLIENT_ARGS="--args.task-suite-name libero_10"
 ```
 
+To connect the simulator to an authenticated Modal deployment, export the proxy token variables and pass the full WebSocket URL:
+
+```bash
+python examples/libero/main.py \
+  --modal-endpoint "$OPENPI_LIBERO_MODAL_ENDPOINT" \
+  --task-id 0 \
+  --num-trials-per-task 1 \
+  --max-steps 80 \
+  --display
+```
+
+This runs one short Franka Panda task, opens an agent-camera preview, and saves an MP4. Press `q` or Escape to stop early.
+
 ## Without Docker (not recommended)
 
 Terminal window 1:
