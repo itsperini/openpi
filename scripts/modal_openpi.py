@@ -9,7 +9,8 @@ import modal
 APP_NAME = os.getenv("OPENPI_APP_NAME", "openpi")
 OPENPI_REPOSITORY = os.getenv("OPENPI_REPOSITORY", "https://github.com/itsperini/openpi.git")
 OPENPI_GIT_REF = os.getenv("OPENPI_GIT_REF", "15a9616a00943ada6c20a0f158e3adb39df2ccac")
-OPENPI_SERVER_ARGS = shlex.split(os.getenv("OPENPI_SERVER_ARGS", "--env=DROID"))
+OPENPI_SERVER_ARGS_VALUE = os.getenv("OPENPI_SERVER_ARGS", "--env=DROID")
+OPENPI_SERVER_ARGS = shlex.split(OPENPI_SERVER_ARGS_VALUE)
 OPENPI_GPU = os.getenv("OPENPI_GPU", "L40S")
 OPENPI_MIN_CONTAINERS = int(os.getenv("OPENPI_MIN_CONTAINERS", "0"))
 OPENPI_CACHE_PATH = "/openpi-cache"
@@ -40,7 +41,14 @@ image = (
         "cd /openpi && git submodule update --init --recursive",
         "cd /openpi && GIT_LFS_SKIP_SMUDGE=1 uv sync --frozen --no-dev",
     )
-    .env({"OPENPI_DATA_HOME": OPENPI_CACHE_PATH})
+    # The module is imported again inside the remote container. Bake the policy
+    # selection into its environment so the runtime import sees the deployed overlay.
+    .env(
+        {
+            "OPENPI_DATA_HOME": OPENPI_CACHE_PATH,
+            "OPENPI_SERVER_ARGS": OPENPI_SERVER_ARGS_VALUE,
+        }
+    )
     .workdir("/openpi")
 )
 
