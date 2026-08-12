@@ -55,7 +55,10 @@ The overlay selects:
 ```dotenv
 OPENPI_APP_NAME=openpi-libero
 OPENPI_SERVER_ARGS="--env=LIBERO"
+OPENPI_MIN_CONTAINERS=1
 ```
+
+The LIBERO overlay keeps one GPU container warm for interactive testing. Change `OPENPI_MIN_CONTAINERS` to `0` when you want this app to scale down while idle.
 
 Store its returned WebSocket URL separately so it does not replace the DROID endpoint:
 
