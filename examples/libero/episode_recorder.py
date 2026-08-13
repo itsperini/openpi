@@ -146,7 +146,7 @@ class EpisodeRecorder:
                 "trial": self.trial_id,
                 "instruction": self.instruction,
             },
-            "result": {"success": success, "error": error},
+            "result": {"success": bool(success), "error": error},
             "timeline": {
                 "control_hz": self.control_hz,
                 "frame_count": len(self.records),
