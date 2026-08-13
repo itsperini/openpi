@@ -11,7 +11,11 @@ OPENPI_REPOSITORY = os.getenv("OPENPI_REPOSITORY", "https://github.com/itsperini
 OPENPI_GIT_REF = os.getenv("OPENPI_GIT_REF", "15a9616a00943ada6c20a0f158e3adb39df2ccac")
 OPENPI_SERVER_ARGS_VALUE = os.getenv("OPENPI_SERVER_ARGS", "--env=DROID")
 OPENPI_SERVER_ARGS = shlex.split(OPENPI_SERVER_ARGS_VALUE)
-OPENPI_GPU = os.getenv("OPENPI_GPU", "L40S")
+OPENPI_GPU_VALUE = os.getenv("OPENPI_GPU", "L40S,A100-40GB,A100-80GB,H100")
+OPENPI_GPU_FALLBACKS = [gpu.strip() for gpu in OPENPI_GPU_VALUE.split(",") if gpu.strip()]
+if not OPENPI_GPU_FALLBACKS:
+    raise ValueError("OPENPI_GPU must contain at least one GPU type")
+OPENPI_GPU = OPENPI_GPU_FALLBACKS[0] if len(OPENPI_GPU_FALLBACKS) == 1 else OPENPI_GPU_FALLBACKS
 OPENPI_MIN_CONTAINERS = int(os.getenv("OPENPI_MIN_CONTAINERS", "0"))
 OPENPI_CACHE_PATH = "/openpi-cache"
 

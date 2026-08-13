@@ -149,12 +149,14 @@ Resize camera images to 224×224 before sending them. Modal limits individual We
 
 ## Capacity and lifecycle
 
-The defaults use an L40S GPU, a single container, and a 20-minute idle window:
+The defaults prefer an L40S, fall back to compatible 40+ GB GPUs, use a single container, and have a 20-minute idle window:
 
 ```dotenv
-OPENPI_GPU=L40S
+OPENPI_GPU=L40S,A100-40GB,A100-80GB,H100
 OPENPI_MIN_CONTAINERS=0
 ```
+
+Modal tries the GPU list from left to right each time it starts a container. Remove expensive fallback types if you would rather wait for an L40S than use them.
 
 Keeping `OPENPI_MIN_CONTAINERS=0` allows the GPU to shut down between experiments. Set it to `1` only when avoiding cold-start latency is worth continuously reserving and billing the GPU.
 

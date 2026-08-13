@@ -90,6 +90,14 @@ set +a
 
 The Mac launcher configures LIBERO, CGL rendering, and the compatibility setting needed to load LIBERO's trusted initial-state assets.
 
+To verify MuJoCo and the Franka locally before starting Modal, run a mock trajectory that requires no policy server:
+
+```bash
+.venv-libero-mac/bin/python examples/libero/mock_macos.py
+```
+
+This opens a live agent-camera window and saves `data/libero/videos/franka_mock_trajectory.mp4`.
+
 ## Without Docker (not recommended)
 
 Terminal window 1:
