@@ -2,8 +2,11 @@ import { Activity, Check, ChevronLeft, ChevronRight, CircleStop, Gauge, Pause, P
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { EndEffectorPlot } from "./components/EndEffectorPlot";
+import { FlowTracePanel } from "./components/FlowTracePanel";
+import { PipelinePanel } from "./components/PipelinePanel";
+import { RecedingHorizonPanel } from "./components/RecedingHorizonPanel";
 import { TelemetryChart } from "./components/TelemetryChart";
-import type { EpisodeIndex, EpisodeMetadata, LoadedEpisode, TrajectoryRecord } from "./types";
+import type { EpisodeIndex, EpisodeMetadata, FlowTrace, LoadedEpisode, TrajectoryRecord } from "./types";
 
 
 function asset(path: string) {
@@ -26,7 +29,7 @@ function formatVector(values: number[] | undefined, digits = 3) {
 function CameraPanel({ title, label, src, videoRef }: { title: string; label: string; src: string; videoRef: (node: HTMLVideoElement | null) => void }) {
   return (
     <section className="panel camera-panel">
-      <div className="camera-label"><span>{title}</span><small>{label}</small></div>
+      <div className="camera-label"><span>{title}<b>policy input</b></span><small>{label}</small></div>
       <video ref={videoRef} src={src} muted playsInline preload="auto" />
     </section>
   );
@@ -109,6 +112,14 @@ export default function App() {
     }
     return null;
   }, [episode, step]);
+  const latestTrace = useMemo(() => {
+    if (!episode) return { sourceStep: null, trace: null as FlowTrace | null };
+    for (let index = step; index >= 0; index -= 1) {
+      const trace = episode.trajectory[index].policy.debug_trace;
+      if (trace?.supported) return { sourceStep: index, trace };
+    }
+    return { sourceStep: null, trace: null as FlowTrace | null };
+  }, [episode, step]);
 
   if (error) return <main className="empty"><Activity /><h1>Episode data unavailable</h1><p>{error}</p></main>;
   if (!episode || !index || !current) return <main className="empty"><Activity className="spin" /><h1>Loading episode telemetry</h1></main>;
@@ -143,7 +154,7 @@ export default function App() {
 
       <section className="media-grid">
         <section className="panel main-video">
-          <div className="camera-label"><span><Video size={15} /> MuJoCo overview</span><small>frontview</small></div>
+          <div className="camera-label"><span><Video size={15} /> MuJoCo overview <b>telemetry only</b></span><small>frontview</small></div>
           <video ref={(node) => { videos.current.mujoco = node; }} src={videoUrl("mujoco")} muted playsInline preload="auto" onEnded={() => setPlaying(false)} />
         </section>
         <div className="camera-stack">
@@ -161,6 +172,13 @@ export default function App() {
         <time>{current.timestamp.toFixed(2)} / {metadata.timeline.duration_seconds.toFixed(2)} s</time>
       </section>
 
+      <section className="learning-grid">
+        <PipelinePanel metadata={metadata} current={current} trace={latestTrace.trace} />
+        <FlowTracePanel trace={latestTrace.trace} sourceStep={latestTrace.sourceStep} labels={metadata.series.actions} />
+      </section>
+
+      <RecedingHorizonPanel metadata={metadata} trajectory={episode.trajectory} activeStep={step} onSeek={seek} />
+
       <section className="charts-grid">
         <TelemetryChart title="Joint position" subtitle="Panda arm configuration · radians" values={jointPosition} labels={metadata.series.joints} activeStep={step} onSeek={seek} />
         <TelemetryChart title="Joint velocity" subtitle="Angular velocity · radians / second" values={jointVelocity} labels={metadata.series.joints} activeStep={step} onSeek={seek} />
@@ -173,13 +191,14 @@ export default function App() {
 
       <section className="inspectors">
         <section className="panel inspector">
-          <div className="panel-heading"><div><h2>Observation</h2><p>Exact state sent at this timestep</p></div><Activity size={18} /></div>
+          <div className="panel-heading"><div><h2>Environment telemetry</h2><p>Useful for evaluation; qpos and qvel are not policy inputs</p></div><Activity size={18} /></div>
           <dl>
             <div><dt>joint position</dt><dd>{formatVector(current.observation.joint_position)}</dd></div>
             <div><dt>joint velocity</dt><dd>{formatVector(current.observation.joint_velocity)}</dd></div>
             <div><dt>end effector xyz</dt><dd>{formatVector(current.observation.ee_position)}</dd></div>
             <div><dt>end effector quat</dt><dd>{formatVector(current.observation.ee_quaternion)}</dd></div>
             <div><dt>gripper</dt><dd>{formatVector(current.observation.gripper_position)}</dd></div>
+            <div><dt>policy interface state</dt><dd>{formatVector(current.policy_input?.state)}</dd></div>
           </dl>
         </section>
         <section className="panel inspector">

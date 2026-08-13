@@ -419,6 +419,54 @@ class PI0Pytorch(nn.Module):
             time += dt
         return x_t
 
+    @torch.no_grad()
+    def sample_actions_with_trace(self, device, observation, noise=None):
+        """Sample actions and retain the ten intermediate flow states for debugging."""
+        bsize = observation.state.shape[0]
+        num_steps = 10
+        if noise is None:
+            actions_shape = (bsize, self.config.action_horizon, self.config.action_dim)
+            noise = self.sample_noise(actions_shape, device)
+
+        images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=False)
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
+        prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+        prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+        prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks)
+        self.paligemma_with_expert.paligemma.language_model.config._attn_implementation = "eager"  # noqa: SLF001
+        _, past_key_values = self.paligemma_with_expert.forward(
+            attention_mask=prefix_att_2d_masks_4d,
+            position_ids=prefix_position_ids,
+            past_key_values=None,
+            inputs_embeds=[prefix_embs, None],
+            use_cache=True,
+        )
+
+        dt = torch.tensor(-1.0 / num_steps, dtype=torch.float32, device=device)
+        x_t = noise
+        action_states = [x_t]
+        velocities = []
+        for step_index in range(num_steps):
+            time = torch.tensor(1.0 - step_index / num_steps, dtype=torch.float32, device=device)
+            velocity = self.denoise_step(
+                state,
+                prefix_pad_masks,
+                past_key_values,
+                x_t,
+                time.expand(bsize),
+            )
+            x_t = x_t + dt * velocity
+            action_states.append(x_t)
+            velocities.append(velocity)
+
+        timesteps = torch.linspace(1.0, 0.0, num_steps + 1, dtype=torch.float32, device=device)
+        trace = {
+            "timesteps": timesteps[None, :].expand(bsize, -1),
+            "action_states": torch.stack(action_states, dim=1),
+            "velocities": torch.stack(velocities, dim=1),
+        }
+        return x_t, trace
+
     def denoise_step(
         self,
         state,

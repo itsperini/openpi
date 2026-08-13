@@ -277,3 +277,62 @@ class Pi0(_model.BaseModel):
 
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
         return x_0
+
+    def sample_actions_with_trace(
+        self,
+        rng: at.KeyArrayLike,
+        observation: _model.Observation,
+        *,
+        noise: at.Float[at.Array, "b ah ad"] | None = None,
+    ) -> tuple[_model.Actions, dict[str, at.Array]]:
+        """Sample actions while retaining the ten flow-matching integration states.
+
+        This is intentionally a separate debug path so normal policy inference does not
+        materialize or transfer the intermediate action tensors.
+        """
+        observation = _model.preprocess_observation(None, observation, train=False)
+        num_steps = 10
+        dt = -1.0 / num_steps
+        batch_size = observation.state.shape[0]
+        if noise is None:
+            noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
+
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+        positions = jnp.cumsum(prefix_mask, axis=1) - 1
+        _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
+
+        def step(x_t, time):
+            suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
+                observation, x_t, jnp.broadcast_to(time, batch_size)
+            )
+            suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
+            prefix_attn_mask = einops.repeat(prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1])
+            full_attn_mask = jnp.concatenate([prefix_attn_mask, suffix_attn_mask], axis=-1)
+            positions = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
+
+            (prefix_out, suffix_out), _ = self.PaliGemma.llm(
+                [None, suffix_tokens],
+                mask=full_attn_mask,
+                positions=positions,
+                kv_cache=kv_cache,
+                adarms_cond=[None, adarms_cond],
+            )
+            assert prefix_out is None
+            velocity = self.action_out_proj(suffix_out[:, -self.action_horizon :])
+            next_x = x_t + dt * velocity
+            return next_x, (next_x, velocity)
+
+        integration_times = jnp.linspace(1.0, 1.0 / num_steps, num_steps, dtype=jnp.float32)
+        x_0, (sampled_states, velocities) = jax.lax.scan(step, noise, integration_times)
+        action_states = jnp.concatenate([noise[None, ...], sampled_states], axis=0)
+        timesteps = jnp.broadcast_to(
+            jnp.linspace(1.0, 0.0, num_steps + 1, dtype=jnp.float32)[None, :],
+            (batch_size, num_steps + 1),
+        )
+        trace = {
+            "timesteps": timesteps,
+            "action_states": jnp.moveaxis(action_states, 0, 1),
+            "velocities": jnp.moveaxis(velocities, 0, 1),
+        }
+        return x_0, trace

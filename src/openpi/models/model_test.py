@@ -23,6 +23,15 @@ def test_pi0_model():
     actions = nnx_utils.module_jit(model.sample_actions)(key, obs, num_steps=10)
     assert actions.shape == (batch_size, model.action_horizon, model.action_dim)
 
+    noise = jax.random.normal(key, actions.shape)
+    traced_actions, trace = nnx_utils.module_jit(model.sample_actions_with_trace)(key, obs, noise=noise)
+    expected_actions = nnx_utils.module_jit(model.sample_actions)(key, obs, num_steps=10, noise=noise)
+    assert traced_actions.shape == actions.shape
+    assert trace["timesteps"].shape == (batch_size, 11)
+    assert trace["action_states"].shape == (batch_size, 11, model.action_horizon, model.action_dim)
+    assert trace["velocities"].shape == (batch_size, 10, model.action_horizon, model.action_dim)
+    assert jax.numpy.allclose(traced_actions, expected_actions, atol=1e-5)
+
 
 def test_pi0_lora_model():
     key = jax.random.key(0)

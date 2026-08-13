@@ -110,7 +110,9 @@ npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. A single timeline drives all three videos, joint state, end-effector position, executed actions, predicted action chunks, and inference metadata.
+Open `http://127.0.0.1:5173`. A single timeline drives all three videos, joint state, end-effector position, executed actions, predicted action chunks, and inference metadata. Traced rollouts also expose every internal flow-matching integration state, the exact model-input provenance, and which portion of each receding-horizon plan was executed or discarded.
+
+Internal tracing is enabled by default for this learning dashboard. Disable it for ordinary evaluation with `--args.no-record-debug-trace`; the standard inference path then avoids materializing or transferring intermediate model tensors.
 
 ## Without Docker (not recommended)
 

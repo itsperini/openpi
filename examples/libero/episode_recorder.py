@@ -12,6 +12,7 @@ import numpy as np
 
 ACTION_LABELS = ["Δx", "Δy", "Δz", "Δroll", "Δpitch", "Δyaw", "gripper"]
 JOINT_LABELS = [f"joint {index}" for index in range(1, 8)]
+POLICY_STATE_LABELS = ["ee x", "ee y", "ee z", "axis x", "axis y", "axis z", "gripper left", "gripper right"]
 
 
 def _json_value(value: Any) -> Any:
@@ -59,6 +60,8 @@ class EpisodeRecorder:
         *,
         step: int,
         observation: dict[str, Any],
+        policy_input_state: np.ndarray,
+        prompt: str,
         mujoco_frame: np.ndarray,
         agent_frame: np.ndarray,
         wrist_frame: np.ndarray,
@@ -69,6 +72,7 @@ class EpisodeRecorder:
         inference_ms: float | None,
         server_timing: dict[str, Any] | None,
         policy_timing: dict[str, Any] | None,
+        debug_trace: dict[str, Any] | None,
         reward: float,
         done: bool,
     ) -> None:
@@ -87,6 +91,11 @@ class EpisodeRecorder:
                     "gripper_position": _json_value(observation["robot0_gripper_qpos"]),
                     "gripper_velocity": _json_value(observation["robot0_gripper_qvel"]),
                 },
+                "policy_input": {
+                    "state": _json_value(policy_input_state),
+                    "state_labels": POLICY_STATE_LABELS,
+                    "prompt": prompt,
+                },
                 "policy": {
                     "executed_action": _json_value(executed_action),
                     "chunk_id": chunk_id,
@@ -95,6 +104,7 @@ class EpisodeRecorder:
                     "inference_ms": inference_ms,
                     "server_timing": _json_value(server_timing or {}),
                     "policy_timing": _json_value(policy_timing or {}),
+                    "debug_trace": _json_value(debug_trace) if debug_trace is not None else None,
                 },
                 "result": {"reward": float(reward), "done": bool(done)},
             }
@@ -113,18 +123,21 @@ class EpisodeRecorder:
 
         action_horizon = 0
         inference_count = 0
+        trace_count = 0
         inference_values = []
         for record in self.records:
             policy = record["policy"]
             if policy["action_chunk"] is not None:
                 action_horizon = max(action_horizon, len(policy["action_chunk"]))
                 inference_count += 1
+            if policy["debug_trace"] is not None and policy["debug_trace"].get("supported"):
+                trace_count += 1
             if policy["inference_ms"] is not None:
                 inference_values.append(float(policy["inference_ms"]))
 
         duration = len(self.records) / self.control_hz
         metadata = {
-            "schema_version": 1,
+            "schema_version": 2,
             "episode_id": self.episode_id,
             "created_at": self.created_at,
             "task": {
@@ -145,8 +158,22 @@ class EpisodeRecorder:
                 "replan_steps": self.replan_steps,
                 "action_horizon": action_horizon,
                 "inference_count": inference_count,
+                "trace_count": trace_count,
                 "mean_inference_ms": round(float(np.mean(inference_values)), 3) if inference_values else None,
                 "server_metadata": self.server_metadata,
+            },
+            "pipeline": {
+                "model": self.server_metadata.get("pipeline", {}),
+                "inputs": [
+                    {"id": "mujoco", "label": "MuJoCo front view", "role": "telemetry_only"},
+                    {"id": "agent", "label": "Agent camera", "role": "policy_input"},
+                    {"id": "wrist", "label": "Wrist camera", "role": "policy_input"},
+                    {"id": "right_wrist", "label": "Third camera slot", "role": "masked_padding"},
+                    {"id": "joint_state", "label": "Joint qpos / qvel", "role": "telemetry_only"},
+                    {"id": "policy_state", "label": "8-D end-effector state", "role": "transported_input"},
+                    {"id": "prompt", "label": "Language instruction", "role": "policy_input"},
+                ],
+                "policy_state_labels": POLICY_STATE_LABELS,
             },
             "series": {"joints": JOINT_LABELS, "actions": ACTION_LABELS},
             "artifacts": {"trajectory": "trajectory.jsonl", "videos": videos},

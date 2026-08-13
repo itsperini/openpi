@@ -50,6 +50,7 @@ class Args:
     #################################################################################################################
     video_out_path: str = "data/libero/videos"  # Path to save videos
     episode_out_path: str = "data/libero/episodes"  # Synchronized videos and telemetry for the visualizer.
+    record_debug_trace: bool = True  # Request the ten internal flow-matching states from the policy server.
     display: bool = False  # Show the agent-view camera while the simulation runs.
 
     seed: int = 7  # Random Seed (for reproducibility)
@@ -166,21 +167,24 @@ def eval_libero(args: Args) -> None:
                             logging.info("Preview stopped from the display window")
                             break
 
+                    policy_input_state = np.concatenate(
+                        (
+                            obs["robot0_eef_pos"],
+                            _quat2axisangle(obs["robot0_eef_quat"]),
+                            obs["robot0_gripper_qpos"],
+                        )
+                    )
                     if not action_plan:
                         # Finished executing previous action chunk -- compute new chunk
                         # Prepare observations dict
                         element = {
                             "observation/image": img,
                             "observation/wrist_image": wrist_img,
-                            "observation/state": np.concatenate(
-                                (
-                                    obs["robot0_eef_pos"],
-                                    _quat2axisangle(obs["robot0_eef_quat"]),
-                                    obs["robot0_gripper_qpos"],
-                                )
-                            ),
+                            "observation/state": policy_input_state,
                             "prompt": str(task_description),
                         }
+                        if args.record_debug_trace:
+                            element["_openpi_debug"] = True
 
                         # Query model to get action
                         inference_start = time.perf_counter()
@@ -196,11 +200,13 @@ def eval_libero(args: Args) -> None:
                         new_action_chunk = np.asarray(action_chunk)
                         server_timing = policy_result.get("server_timing", {})
                         policy_timing = policy_result.get("policy_timing", {})
+                        debug_trace = policy_result.get("debug_trace")
                     else:
                         inference_ms = None
                         new_action_chunk = None
                         server_timing = None
                         policy_timing = None
+                        debug_trace = None
 
                     action = action_plan.popleft()
 
@@ -210,6 +216,8 @@ def eval_libero(args: Args) -> None:
                     recorder.record(
                         step=len(replay_images) - 1,
                         observation=input_obs,
+                        policy_input_state=policy_input_state,
+                        prompt=str(task_description),
                         mujoco_frame=mujoco_img,
                         agent_frame=img,
                         wrist_frame=wrist_img,
@@ -220,6 +228,7 @@ def eval_libero(args: Args) -> None:
                         inference_ms=inference_ms,
                         server_timing=server_timing,
                         policy_timing=policy_timing,
+                        debug_trace=debug_trace,
                         reward=reward,
                         done=done,
                     )
