@@ -133,6 +133,9 @@ celerybeat.pid
 !.env.example
 !.env.*.example
 .venv
+.venv-*
+.uv-cache/
+.matplotlib-cache/
 env/
 venv/
 ENV/

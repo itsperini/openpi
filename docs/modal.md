@@ -125,16 +125,22 @@ actions = result["actions"]
 For a Franka Panda in MuJoCo, install the LIBERO runtime and run a short authenticated preview against the separate endpoint:
 
 ```bash
+UV_CACHE_DIR="$PWD/.uv-cache" uv venv --python 3.11 .venv-libero-mac
+UV_CACHE_DIR="$PWD/.uv-cache" uv pip install \
+  --python .venv-libero-mac/bin/python \
+  torch==2.9.0 \
+  -r examples/libero/requirements.macos.txt
+
 set -a
 source .env
 set +a
 
-python examples/libero/main.py \
-  --modal-endpoint "$OPENPI_LIBERO_MODAL_ENDPOINT" \
-  --task-id 0 \
-  --num-trials-per-task 1 \
-  --max-steps 80 \
-  --display
+.venv-libero-mac/bin/python examples/libero/run_macos.py \
+  --args.modal-endpoint "$OPENPI_LIBERO_MODAL_ENDPOINT" \
+  --args.task-id 0 \
+  --args.num-trials-per-task 1 \
+  --args.max-steps 80 \
+  --args.display
 ```
 
 Press `q` or Escape in the display window to stop the preview. The rollout is also written beneath `data/libero/videos`.

@@ -38,14 +38,57 @@ To connect the simulator to an authenticated Modal deployment, export the proxy 
 
 ```bash
 python examples/libero/main.py \
-  --modal-endpoint "$OPENPI_LIBERO_MODAL_ENDPOINT" \
-  --task-id 0 \
-  --num-trials-per-task 1 \
-  --max-steps 80 \
-  --display
+  --args.modal-endpoint "$OPENPI_LIBERO_MODAL_ENDPOINT" \
+  --args.task-id 0 \
+  --args.num-trials-per-task 1 \
+  --args.max-steps 80 \
+  --args.display
 ```
 
 This runs one short Franka Panda task, opens an agent-camera preview, and saves an MP4. Press `q` or Escape to stop early.
+
+### Apple Silicon Mac
+
+The stock LIBERO container targets an NVIDIA Linux host. On an Apple Silicon Mac, use the CPU-only headless runtime while keeping inference on Modal:
+
+```bash
+docker build -t openpi-libero-macos -f examples/libero/Dockerfile.macos .
+
+docker run --rm \
+  --env-file .env \
+  -v "$PWD:/app" \
+  openpi-libero-macos \
+  python examples/libero/main.py \
+  --args.modal-endpoint "$OPENPI_LIBERO_MODAL_ENDPOINT" \
+  --args.task-id 0 \
+  --args.num-trials-per-task 1 \
+  --args.max-steps 80
+```
+
+This writes the Franka camera rollout beneath `data/libero/videos`. The container is headless because Docker Desktop does not expose a native MuJoCo GUI from its Linux VM; play the resulting MP4 on the Mac.
+
+If Docker Desktop is unavailable, the simulator can run natively on Apple Silicon:
+
+```bash
+UV_CACHE_DIR="$PWD/.uv-cache" uv venv --python 3.11 .venv-libero-mac
+UV_CACHE_DIR="$PWD/.uv-cache" uv pip install \
+  --python .venv-libero-mac/bin/python \
+  torch==2.9.0 \
+  -r examples/libero/requirements.macos.txt
+
+set -a
+source .env
+set +a
+
+.venv-libero-mac/bin/python examples/libero/run_macos.py \
+  --args.modal-endpoint "$OPENPI_LIBERO_MODAL_ENDPOINT" \
+  --args.task-id 0 \
+  --args.num-trials-per-task 1 \
+  --args.max-steps 80 \
+  --args.display
+```
+
+The Mac launcher configures LIBERO, CGL rendering, and the compatibility setting needed to load LIBERO's trusted initial-state assets.
 
 ## Without Docker (not recommended)
 
