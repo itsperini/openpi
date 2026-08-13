@@ -3,7 +3,9 @@ import dataclasses
 import logging
 import math
 import pathlib
+import time
 
+from episode_recorder import EpisodeRecorder
 import imageio
 from libero.libero import benchmark
 from libero.libero import get_libero_path
@@ -47,6 +49,7 @@ class Args:
     # Utils
     #################################################################################################################
     video_out_path: str = "data/libero/videos"  # Path to save videos
+    episode_out_path: str = "data/libero/episodes"  # Synchronized videos and telemetry for the visualizer.
     display: bool = False  # Show the agent-view camera while the simulation runs.
 
     seed: int = 7  # Random Seed (for reproducibility)
@@ -119,6 +122,19 @@ def eval_libero(args: Args) -> None:
             t = 0
             replay_images = []
             done = False
+            episode_error = None
+            recorder = EpisodeRecorder(
+                args.episode_out_path,
+                task_suite=args.task_suite_name,
+                task_id=task_id,
+                trial_id=episode_idx,
+                instruction=str(task_description),
+                control_hz=20,
+                replan_steps=args.replan_steps,
+                server_metadata=client.get_server_metadata(),
+            )
+            chunk_id = -1
+            chunk_step = 0
 
             logging.info(f"Starting episode {task_episodes + 1}...")
             while t < max_steps + args.num_steps_wait:
@@ -134,6 +150,7 @@ def eval_libero(args: Args) -> None:
                     # IMPORTANT: rotate 180 degrees to match train preprocessing
                     img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
                     wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
+                    mujoco_img = np.ascontiguousarray(obs.get("frontview_image", obs["agentview_image"])[::-1, ::-1])
                     img = image_tools.convert_to_uint8(
                         image_tools.resize_with_pad(img, args.resize_size, args.resize_size)
                     )
@@ -166,24 +183,56 @@ def eval_libero(args: Args) -> None:
                         }
 
                         # Query model to get action
-                        action_chunk = client.infer(element)["actions"]
+                        inference_start = time.perf_counter()
+                        policy_result = client.infer(element)
+                        inference_ms = (time.perf_counter() - inference_start) * 1000
+                        action_chunk = policy_result["actions"]
                         assert len(action_chunk) >= args.replan_steps, (
                             f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
                         )
                         action_plan.extend(action_chunk[: args.replan_steps])
+                        chunk_id += 1
+                        chunk_step = 0
+                        new_action_chunk = np.asarray(action_chunk)
+                        server_timing = policy_result.get("server_timing", {})
+                        policy_timing = policy_result.get("policy_timing", {})
+                    else:
+                        inference_ms = None
+                        new_action_chunk = None
+                        server_timing = None
+                        policy_timing = None
 
                     action = action_plan.popleft()
 
                     # Execute action in environment
+                    input_obs = obs
                     obs, reward, done, info = env.step(action.tolist())
+                    recorder.record(
+                        step=len(replay_images) - 1,
+                        observation=input_obs,
+                        mujoco_frame=mujoco_img,
+                        agent_frame=img,
+                        wrist_frame=wrist_img,
+                        executed_action=np.asarray(action),
+                        chunk_id=chunk_id,
+                        chunk_step=chunk_step,
+                        action_chunk=new_action_chunk,
+                        inference_ms=inference_ms,
+                        server_timing=server_timing,
+                        policy_timing=policy_timing,
+                        reward=reward,
+                        done=done,
+                    )
+                    chunk_step += 1
                     if done:
                         task_successes += 1
                         total_successes += 1
                         break
                     t += 1
 
-                except Exception as e:
-                    logging.error(f"Caught exception: {e}")
+                except Exception as error:
+                    episode_error = str(error)
+                    logging.error(f"Caught exception: {error}")
                     break
 
             task_episodes += 1
@@ -199,6 +248,9 @@ def eval_libero(args: Args) -> None:
                 )
                 imageio.mimwrite(video_path, [np.asarray(x) for x in replay_images], fps=10)
                 logging.info(f"Saved rollout video to {video_path}")
+
+            episode_path = recorder.finalize(success=done, error=episode_error)
+            logging.info(f"Saved synchronized episode to {episode_path}")
 
             # Log current results
             logging.info(f"Success: {done}")
@@ -226,7 +278,12 @@ def _get_libero_env(task, resolution, seed):
     """Initializes and returns the LIBERO environment, along with the task description."""
     task_description = task.language
     task_bddl_file = pathlib.Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
-    env_args = {"bddl_file_name": task_bddl_file, "camera_heights": resolution, "camera_widths": resolution}
+    env_args = {
+        "bddl_file_name": task_bddl_file,
+        "camera_names": ["frontview", "agentview", "robot0_eye_in_hand"],
+        "camera_heights": resolution,
+        "camera_widths": resolution,
+    }
     env = OffScreenRenderEnv(**env_args)
     env.seed(seed)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     return env, task_description

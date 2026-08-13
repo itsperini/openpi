@@ -98,6 +98,20 @@ To verify MuJoCo and the Franka locally before starting Modal, run a mock trajec
 
 This opens a live agent-camera window and saves `data/libero/videos/franka_mock_trajectory.mp4`.
 
+### Synchronized episode inspector
+
+Policy rollouts also write a synchronized episode beneath `data/libero/episodes`. Each episode contains the MuJoCo overview, both policy camera videos, `metadata.json`, and per-step telemetry in `trajectory.jsonl`.
+
+Start the Vite dashboard after recording an episode:
+
+```bash
+cd examples/libero/visualizer
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5173`. A single timeline drives all three videos, joint state, end-effector position, executed actions, predicted action chunks, and inference metadata.
+
 ## Without Docker (not recommended)
 
 Terminal window 1:
