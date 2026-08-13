@@ -4,6 +4,7 @@ import logging
 import math
 import pathlib
 import time
+from typing import Literal
 
 from episode_recorder import EpisodeRecorder
 import imageio
@@ -25,8 +26,10 @@ class Args:
     #################################################################################################################
     # Model server parameters
     #################################################################################################################
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8000
+    # Labels direct WebSocket rollouts. Use "vm" when host/port point at an SSH tunnel.
+    inference_backend: Literal["local", "vm"] = "local"
     # Authenticated Modal WebSocket URL. When set, host and port are ignored.
     modal_endpoint: str | None = None
     resize_size: int = 224
@@ -81,6 +84,17 @@ def eval_libero(args: Args) -> None:
         raise ValueError(f"Unknown task suite: {args.task_suite_name}") from error
 
     client = _create_policy_client(args)
+    inference_backend = _inference_backend(args)
+    inference_transport = "modal_proxy" if inference_backend == "modal" else (
+        "ssh_tunnel" if inference_backend == "vm" else "direct_websocket"
+    )
+    inference_endpoint = args.modal_endpoint or f"ws://{args.host}:{args.port}"
+    logging.info(
+        "Policy server: backend=%s transport=%s endpoint=%s",
+        inference_backend,
+        inference_transport,
+        inference_endpoint,
+    )
 
     if args.task_id is None:
         task_ids = range(num_tasks_in_suite)
@@ -133,6 +147,9 @@ def eval_libero(args: Args) -> None:
                 control_hz=20,
                 replan_steps=args.replan_steps,
                 server_metadata=client.get_server_metadata(),
+                inference_backend=inference_backend,
+                inference_transport=inference_transport,
+                inference_endpoint=inference_endpoint,
             )
             chunk_id = -1
             chunk_step = 0
@@ -281,6 +298,10 @@ def _create_policy_client(args: Args) -> _websocket_client_policy.WebsocketClien
     if args.modal_endpoint:
         return _websocket_client_policy.WebsocketClientPolicy.from_modal(endpoint=args.modal_endpoint)
     return _websocket_client_policy.WebsocketClientPolicy(args.host, args.port)
+
+
+def _inference_backend(args: Args) -> Literal["local", "modal", "vm"]:
+    return "modal" if args.modal_endpoint else args.inference_backend
 
 
 def _get_libero_env(task, resolution, seed):

@@ -1,3 +1,5 @@
+export type InferenceBackend = "local" | "modal" | "vm";
+
 export interface EpisodeSummary {
   episode_id: string;
   created_at: string;
@@ -5,6 +7,8 @@ export interface EpisodeSummary {
   success: boolean;
   duration_seconds: number;
   metadata: string;
+  inference_backend?: InferenceBackend;
+  inference_transport?: string;
 }
 
 export interface EpisodeIndex {
@@ -17,6 +21,11 @@ export interface EpisodeMetadata {
   schema_version?: number;
   episode_id: string;
   created_at: string;
+  serving?: {
+    backend: InferenceBackend;
+    transport: string;
+    endpoint: string;
+  };
   task: { suite: string; id: number; trial: number; instruction: string };
   result: { success: boolean; error: string | null };
   timeline: { control_hz: number; frame_count: number; duration_seconds: number };

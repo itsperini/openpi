@@ -1,4 +1,4 @@
-import { Activity, Check, ChevronLeft, ChevronRight, CircleStop, Gauge, Pause, Play, RotateCcw, Video } from "lucide-react";
+import { Activity, Check, ChevronLeft, ChevronRight, CircleStop, Cloud, Gauge, Pause, Play, RotateCcw, Server, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { EndEffectorPlot } from "./components/EndEffectorPlot";
@@ -6,7 +6,27 @@ import { FlowTracePanel } from "./components/FlowTracePanel";
 import { PipelinePanel } from "./components/PipelinePanel";
 import { RecedingHorizonPanel } from "./components/RecedingHorizonPanel";
 import { TelemetryChart } from "./components/TelemetryChart";
-import type { EpisodeIndex, EpisodeMetadata, FlowTrace, LoadedEpisode, TrajectoryRecord } from "./types";
+import type { EpisodeIndex, EpisodeMetadata, EpisodeSummary, FlowTrace, InferenceBackend, LoadedEpisode, TrajectoryRecord } from "./types";
+
+
+type EpisodeFilter = "all" | "modal" | "vm";
+
+const BACKEND_FILTERS: Array<{ id: EpisodeFilter; label: string }> = [
+  { id: "all", label: "All" },
+  { id: "modal", label: "Modal" },
+  { id: "vm", label: "Remote VM" },
+];
+
+function episodeBackend(summary: EpisodeSummary): InferenceBackend {
+  // Episodes recorded before VM support were produced by this fork's Modal workflow.
+  return summary.inference_backend ?? "modal";
+}
+
+function backendLabel(backend: InferenceBackend) {
+  if (backend === "vm") return "Remote VM";
+  if (backend === "modal") return "Modal";
+  return "Local";
+}
 
 
 function asset(path: string) {
@@ -37,6 +57,7 @@ function CameraPanel({ title, label, src, videoRef }: { title: string; label: st
 
 export default function App() {
   const [index, setIndex] = useState<EpisodeIndex | null>(null);
+  const [backendFilter, setBackendFilter] = useState<EpisodeFilter>("all");
   const [selected, setSelected] = useState("");
   const [episode, setEpisode] = useState<LoadedEpisode | null>(null);
   const [step, setStep] = useState(0);
@@ -44,6 +65,20 @@ export default function App() {
   const [error, setError] = useState("");
   const videos = useRef<Record<string, HTMLVideoElement | null>>({});
   const animation = useRef(0);
+
+  const backendCounts = useMemo(() => {
+    const episodes = index?.episodes ?? [];
+    return {
+      all: episodes.length,
+      modal: episodes.filter((item) => episodeBackend(item) === "modal").length,
+      vm: episodes.filter((item) => episodeBackend(item) === "vm").length,
+    };
+  }, [index]);
+  const filteredEpisodes = useMemo(() => {
+    if (!index || backendFilter === "all") return index?.episodes ?? [];
+    return index.episodes.filter((item) => episodeBackend(item) === backendFilter);
+  }, [backendFilter, index]);
+  const selectedSummary = index?.episodes.find((item) => item.metadata === selected);
 
   useEffect(() => {
     fetch(asset("index.json"))
@@ -59,9 +94,15 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!index || filteredEpisodes.some((item) => item.metadata === selected)) return;
+    setSelected(filteredEpisodes[0]?.metadata ?? "");
+  }, [filteredEpisodes, index, selected]);
+
+  useEffect(() => {
     if (!selected) return;
     setPlaying(false);
     setStep(0);
+    setError("");
     loadEpisode(selected).then(setEpisode).catch((reason: Error) => setError(reason.message));
   }, [selected]);
 
@@ -131,16 +172,43 @@ export default function App() {
   const eePosition = episode.trajectory.map((record) => record.observation.ee_position);
   const actions = episode.trajectory.map((record) => record.policy.executed_action);
   const inference = episode.trajectory.slice(0, step + 1).reverse().find((record) => record.policy.inference_ms !== null)?.policy.inference_ms;
+  const activeBackend = metadata.serving?.backend ?? (selectedSummary ? episodeBackend(selectedSummary) : "modal");
+  const activeTransport = metadata.serving?.transport ?? (activeBackend === "modal" ? "modal_proxy" : "legacy");
 
   return (
     <main className="app-shell">
       <header className="topbar">
         <div className="brand"><span className="brand-mark"><Activity size={18} /></span><div><strong>OpenPI Inspector</strong><small>LIBERO · Franka Panda</small></div></div>
+        <div className="backend-switch" aria-label="Inference source">
+          <span>Source</span>
+          <div className="backend-tabs">
+            {BACKEND_FILTERS.map((filter) => (
+              <button
+                type="button"
+                key={filter.id}
+                className={backendFilter === filter.id ? "active" : ""}
+                disabled={backendCounts[filter.id] === 0}
+                onClick={() => setBackendFilter(filter.id)}
+              >
+                {filter.id === "modal" && <Cloud size={13} />}
+                {filter.id === "vm" && <Server size={13} />}
+                {filter.label}<b>{backendCounts[filter.id]}</b>
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="episode-picker">
           <label htmlFor="episode">Episode</label>
           <select id="episode" value={selected} onChange={(event) => setSelected(event.target.value)}>
-            {index.episodes.map((item) => <option key={item.episode_id} value={item.metadata}>{item.episode_id}</option>)}
+            {filteredEpisodes.map((item) => (
+              <option key={item.episode_id} value={item.metadata}>
+                {backendFilter === "all" ? `[${backendLabel(episodeBackend(item))}] ` : ""}{item.episode_id}
+              </option>
+            ))}
           </select>
+        </div>
+        <div className={`backend-badge ${activeBackend}`}>
+          {activeBackend === "modal" ? <Cloud size={14} /> : <Server size={14} />}{backendLabel(activeBackend)}
         </div>
         <div className={`result ${metadata.result.success ? "success" : "failure"}`}>
           {metadata.result.success ? <Check size={15} /> : <CircleStop size={15} />}{metadata.result.success ? "Task success" : "Incomplete"}
@@ -205,6 +273,8 @@ export default function App() {
           <div className="panel-heading"><div><h2>Policy</h2><p>Plan, execution and timing</p></div><Gauge size={18} /></div>
           <dl>
             <div><dt>checkpoint</dt><dd>{metadata.policy.checkpoint}</dd></div>
+            <div><dt>inference source</dt><dd>{backendLabel(activeBackend)}</dd></div>
+            <div><dt>transport</dt><dd>{activeTransport.replaceAll("_", " ")}</dd></div>
             <div><dt>last inference</dt><dd>{inference?.toFixed(1) ?? "—"} ms</dd></div>
             <div><dt>mean inference</dt><dd>{metadata.policy.mean_inference_ms?.toFixed(1) ?? "—"} ms</dd></div>
             <div><dt>action horizon</dt><dd>{metadata.policy.action_horizon} · execute {metadata.policy.replan_steps}</dd></div>

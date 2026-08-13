@@ -47,6 +47,38 @@ python examples/libero/main.py \
 
 This runs one short Franka Panda task, opens an agent-camera preview, and saves an MP4. Press `q` or Escape to stop early.
 
+### Remote GPU VM over SSH
+
+The vanilla OpenPI policy server can run on a persistent NVIDIA VM while the LIBERO simulator stays on the Mac. Start the π0.5 LIBERO policy on the VM:
+
+```bash
+cd /path/to/openpi
+OPENPI_DATA_HOME="$HOME/.cache/openpi" uv run scripts/serve_policy.py --env=LIBERO
+```
+
+On the Mac, configure and open the SSH tunnel in a dedicated terminal:
+
+```bash
+cp .env.vm.example .env.vm
+# Set the VM address, SSH user, and private-key path in .env.vm.
+./scripts/connect_vm.sh
+```
+
+Then run the native simulator without a Modal endpoint and label the rollout as VM-backed:
+
+```bash
+.venv-libero-mac/bin/python examples/libero/run_macos.py \
+  --args.inference-backend vm \
+  --args.host 127.0.0.1 \
+  --args.port 8000 \
+  --args.task-id 0 \
+  --args.num-trials-per-task 1 \
+  --args.max-steps 80 \
+  --args.display
+```
+
+The policy traffic stays inside the SSH tunnel. Keep `scripts/connect_vm.sh` running for the full rollout. `--args.modal-endpoint` takes precedence, so omit it for VM inference.
+
 ### Apple Silicon Mac
 
 The stock LIBERO container targets an NVIDIA Linux host. On an Apple Silicon Mac, use the CPU-only headless runtime while keeping inference on Modal:
@@ -111,6 +143,8 @@ npm run dev
 ```
 
 Open `http://127.0.0.1:5173`. A single timeline drives all three videos, joint state, end-effector position, executed actions, predicted action chunks, and inference metadata. Traced rollouts also expose every internal flow-matching integration state, the exact model-input provenance, and which portion of each receding-horizon plan was executed or discarded.
+
+The source switch in the header filters episodes produced by Modal or the SSH-connected remote VM. Episodes recorded before VM support are treated as Modal episodes for backward compatibility.
 
 Internal tracing is enabled by default for this learning dashboard. Disable it for ordinary evaluation with `--args.no-record-debug-trace`; the standard inference path then avoids materializing or transferring intermediate model tensors.
 

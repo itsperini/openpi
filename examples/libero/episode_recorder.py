@@ -39,6 +39,9 @@ class EpisodeRecorder:
         control_hz: int,
         replan_steps: int,
         server_metadata: dict[str, Any],
+        inference_backend: str,
+        inference_transport: str,
+        inference_endpoint: str,
     ) -> None:
         created_at = datetime.datetime.now(datetime.UTC)
         self.episode_id = f"episode_{created_at:%Y%m%dT%H%M%SZ}_{task_id:03d}_{trial_id:02d}"
@@ -52,6 +55,9 @@ class EpisodeRecorder:
         self.control_hz = control_hz
         self.replan_steps = replan_steps
         self.server_metadata = _json_value(server_metadata)
+        self.inference_backend = inference_backend
+        self.inference_transport = inference_transport
+        self.inference_endpoint = inference_endpoint
         self.records: list[dict[str, Any]] = []
         self.frames: dict[str, list[np.ndarray]] = {"mujoco": [], "agent": [], "wrist": []}
 
@@ -137,9 +143,14 @@ class EpisodeRecorder:
 
         duration = len(self.records) / self.control_hz
         metadata = {
-            "schema_version": 2,
+            "schema_version": 3,
             "episode_id": self.episode_id,
             "created_at": self.created_at,
+            "serving": {
+                "backend": self.inference_backend,
+                "transport": self.inference_transport,
+                "endpoint": self.inference_endpoint,
+            },
             "task": {
                 "suite": self.task_suite,
                 "id": self.task_id,
@@ -189,7 +200,7 @@ class EpisodeRecorder:
     def _update_index(self, metadata: dict[str, Any]) -> None:
         self.output_root.mkdir(parents=True, exist_ok=True)
         index_path = self.output_root / "index.json"
-        index = json.loads(index_path.read_text()) if index_path.exists() else {"schema_version": 1, "episodes": []}
+        index = json.loads(index_path.read_text()) if index_path.exists() else {"episodes": []}
 
         summary = {
             "episode_id": metadata["episode_id"],
@@ -198,10 +209,13 @@ class EpisodeRecorder:
             "success": metadata["result"]["success"],
             "duration_seconds": metadata["timeline"]["duration_seconds"],
             "metadata": f"{metadata['episode_id']}/metadata.json",
+            "inference_backend": metadata["serving"]["backend"],
+            "inference_transport": metadata["serving"]["transport"],
         }
         episodes = [item for item in index.get("episodes", []) if item["episode_id"] != self.episode_id]
         episodes.append(summary)
         episodes.sort(key=lambda item: item["created_at"], reverse=True)
+        index["schema_version"] = 2
         index["episodes"] = episodes
         index["updated_at"] = datetime.datetime.now(datetime.UTC).isoformat()
         index_path.write_text(json.dumps(index, indent=2) + "\n")
