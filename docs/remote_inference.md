@@ -3,6 +3,8 @@
 
 We provide utilities for running openpi models remotely. This is useful for running inference on more powerful GPUs off-robot, and also helps keep the robot and policy environments separate (and e.g. avoid dependency hell with robot software).
 
+For a hosted NVIDIA GPU deployment using Modal, persistent checkpoint caching, TLS, and proxy-token authentication, see [modal.md](modal.md).
+
 ## Starting a remote policy server
 
 To start a remote policy server, you can simply run the following command:

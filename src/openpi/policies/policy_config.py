@@ -72,6 +72,22 @@ def create_trained_policy(
         except ImportError:
             pytorch_device = "cpu"
 
+    model_config = train_config.model
+    debug_metadata = {
+        "config": train_config.name,
+        "model_type": model_config.model_type.value,
+        "action_horizon": model_config.action_horizon,
+        "model_action_dim": model_config.action_dim,
+        "max_prompt_tokens": model_config.max_token_len,
+        "pi05": bool(getattr(model_config, "pi05", False)),
+        "discrete_state_input": bool(getattr(model_config, "discrete_state_input", False)),
+        "vlm_variant": getattr(model_config, "paligemma_variant", None),
+        "action_expert_variant": getattr(model_config, "action_expert_variant", None),
+        "flow_steps": 10,
+    }
+    policy_metadata = dict(train_config.policy_metadata or {})
+    policy_metadata["pipeline"] = debug_metadata
+
     return _policy.Policy(
         model,
         transforms=[
@@ -88,7 +104,8 @@ def create_trained_policy(
             *repack_transforms.outputs,
         ],
         sample_kwargs=sample_kwargs,
-        metadata=train_config.policy_metadata,
+        metadata=policy_metadata,
+        debug_metadata=debug_metadata,
         is_pytorch=is_pytorch,
         pytorch_device=pytorch_device if is_pytorch else None,
     )

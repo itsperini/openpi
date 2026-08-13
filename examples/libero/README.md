@@ -34,6 +34,120 @@ export SERVER_ARGS="--env LIBERO policy:checkpoint --policy.config pi05_libero -
 export CLIENT_ARGS="--args.task-suite-name libero_10"
 ```
 
+To connect the simulator to an authenticated Modal deployment, export the proxy token variables and pass the full WebSocket URL:
+
+```bash
+python examples/libero/main.py \
+  --args.modal-endpoint "$OPENPI_LIBERO_MODAL_ENDPOINT" \
+  --args.task-id 0 \
+  --args.num-trials-per-task 1 \
+  --args.max-steps 80 \
+  --args.display
+```
+
+This runs one short Franka Panda task, opens an agent-camera preview, and saves an MP4. Press `q` or Escape to stop early.
+
+### Remote GPU VM over SSH
+
+The vanilla OpenPI policy server can run on a persistent NVIDIA VM while the LIBERO simulator stays on the Mac. Start the π0.5 LIBERO policy on the VM:
+
+```bash
+cd /path/to/openpi
+OPENPI_DATA_HOME="$HOME/.cache/openpi" uv run scripts/serve_policy.py --env=LIBERO
+```
+
+On the Mac, configure and open the SSH tunnel in a dedicated terminal:
+
+```bash
+cp .env.vm.example .env.vm
+# Set the VM address, SSH user, and private-key path in .env.vm.
+./scripts/connect_vm.sh
+```
+
+Then run the native simulator without a Modal endpoint and label the rollout as VM-backed:
+
+```bash
+.venv-libero-mac/bin/python examples/libero/run_macos.py \
+  --args.inference-backend vm \
+  --args.host 127.0.0.1 \
+  --args.port 8000 \
+  --args.task-id 0 \
+  --args.num-trials-per-task 1 \
+  --args.max-steps 80 \
+  --args.display
+```
+
+The policy traffic stays inside the SSH tunnel. Keep `scripts/connect_vm.sh` running for the full rollout. `--args.modal-endpoint` takes precedence, so omit it for VM inference.
+
+### Apple Silicon Mac
+
+The stock LIBERO container targets an NVIDIA Linux host. On an Apple Silicon Mac, use the CPU-only headless runtime while keeping inference on Modal:
+
+```bash
+docker build -t openpi-libero-macos -f examples/libero/Dockerfile.macos .
+
+docker run --rm \
+  --env-file .env \
+  -v "$PWD:/app" \
+  openpi-libero-macos \
+  python examples/libero/main.py \
+  --args.modal-endpoint "$OPENPI_LIBERO_MODAL_ENDPOINT" \
+  --args.task-id 0 \
+  --args.num-trials-per-task 1 \
+  --args.max-steps 80
+```
+
+This writes the Franka camera rollout beneath `data/libero/videos`. The container is headless because Docker Desktop does not expose a native MuJoCo GUI from its Linux VM; play the resulting MP4 on the Mac.
+
+If Docker Desktop is unavailable, the simulator can run natively on Apple Silicon:
+
+```bash
+UV_CACHE_DIR="$PWD/.uv-cache" uv venv --python 3.11 .venv-libero-mac
+UV_CACHE_DIR="$PWD/.uv-cache" uv pip install \
+  --python .venv-libero-mac/bin/python \
+  torch==2.9.0 \
+  -r examples/libero/requirements.macos.txt
+
+set -a
+source .env
+set +a
+
+.venv-libero-mac/bin/python examples/libero/run_macos.py \
+  --args.modal-endpoint "$OPENPI_LIBERO_MODAL_ENDPOINT" \
+  --args.task-id 0 \
+  --args.num-trials-per-task 1 \
+  --args.max-steps 80 \
+  --args.display
+```
+
+The Mac launcher configures LIBERO, CGL rendering, and the compatibility setting needed to load LIBERO's trusted initial-state assets.
+
+To verify MuJoCo and the Franka locally before starting Modal, run a mock trajectory that requires no policy server:
+
+```bash
+.venv-libero-mac/bin/python examples/libero/mock_macos.py
+```
+
+This opens a live agent-camera window and saves `data/libero/videos/franka_mock_trajectory.mp4`.
+
+### Synchronized episode inspector
+
+Policy rollouts also write a synchronized episode beneath `data/libero/episodes`. Each episode contains the MuJoCo overview, both policy camera videos, `metadata.json`, and per-step telemetry in `trajectory.jsonl`.
+
+Start the Vite dashboard after recording an episode:
+
+```bash
+cd examples/libero/visualizer
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5173`. A single timeline drives all three videos, joint state, end-effector position, executed actions, predicted action chunks, and inference metadata. Traced rollouts also expose every internal flow-matching integration state, the exact model-input provenance, and which portion of each receding-horizon plan was executed or discarded.
+
+The source switch in the header filters episodes produced by Modal or the SSH-connected remote VM. Episodes recorded before VM support are treated as Modal episodes for backward compatibility.
+
+Internal tracing is enabled by default for this learning dashboard. Disable it for ordinary evaluation with `--args.no-record-debug-trace`; the standard inference path then avoids materializing or transferring intermediate model tensors.
+
 ## Without Docker (not recommended)
 
 Terminal window 1:

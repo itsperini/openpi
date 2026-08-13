@@ -3,7 +3,10 @@ import dataclasses
 import logging
 import math
 import pathlib
+import time
+from typing import Literal
 
+from episode_recorder import EpisodeRecorder
 import imageio
 from libero.libero import benchmark
 from libero.libero import get_libero_path
@@ -23,8 +26,12 @@ class Args:
     #################################################################################################################
     # Model server parameters
     #################################################################################################################
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8000
+    # Labels direct WebSocket rollouts. Use "vm" when host/port point at an SSH tunnel.
+    inference_backend: Literal["local", "vm"] = "local"
+    # Authenticated Modal WebSocket URL. When set, host and port are ignored.
+    modal_endpoint: str | None = None
     resize_size: int = 224
     replan_steps: int = 5
 
@@ -34,13 +41,20 @@ class Args:
     task_suite_name: str = (
         "libero_spatial"  # Task suite. Options: libero_spatial, libero_object, libero_goal, libero_10, libero_90
     )
+    # Run one task instead of the complete suite. Useful for interactive previews.
+    task_id: int | None = None
     num_steps_wait: int = 10  # Number of steps to wait for objects to stabilize i n sim
     num_trials_per_task: int = 50  # Number of rollouts per task
+    # Override the benchmark horizon to create a short preview rollout.
+    max_steps: int | None = None
 
     #################################################################################################################
     # Utils
     #################################################################################################################
     video_out_path: str = "data/libero/videos"  # Path to save videos
+    episode_out_path: str = "data/libero/episodes"  # Synchronized videos and telemetry for the visualizer.
+    record_debug_trace: bool = True  # Request the ten internal flow-matching states from the policy server.
+    display: bool = False  # Show the agent-view camera while the simulation runs.
 
     seed: int = 7  # Random Seed (for reproducibility)
 
@@ -57,24 +71,47 @@ def eval_libero(args: Args) -> None:
 
     pathlib.Path(args.video_out_path).mkdir(parents=True, exist_ok=True)
 
-    if args.task_suite_name == "libero_spatial":
-        max_steps = 220  # longest training demo has 193 steps
-    elif args.task_suite_name == "libero_object":
-        max_steps = 280  # longest training demo has 254 steps
-    elif args.task_suite_name == "libero_goal":
-        max_steps = 300  # longest training demo has 270 steps
-    elif args.task_suite_name == "libero_10":
-        max_steps = 520  # longest training demo has 505 steps
-    elif args.task_suite_name == "libero_90":
-        max_steps = 400  # longest training demo has 373 steps
-    else:
-        raise ValueError(f"Unknown task suite: {args.task_suite_name}")
+    max_steps_by_suite = {
+        "libero_spatial": 220,
+        "libero_object": 280,
+        "libero_goal": 300,
+        "libero_10": 520,
+        "libero_90": 400,
+    }
+    try:
+        max_steps = args.max_steps or max_steps_by_suite[args.task_suite_name]
+    except KeyError as error:
+        raise ValueError(f"Unknown task suite: {args.task_suite_name}") from error
 
-    client = _websocket_client_policy.WebsocketClientPolicy(args.host, args.port)
+    client = _create_policy_client(args)
+    inference_backend = _inference_backend(args)
+    inference_transport = "modal_proxy" if inference_backend == "modal" else (
+        "ssh_tunnel" if inference_backend == "vm" else "direct_websocket"
+    )
+    inference_endpoint = args.modal_endpoint or f"ws://{args.host}:{args.port}"
+    logging.info(
+        "Policy server: backend=%s transport=%s endpoint=%s",
+        inference_backend,
+        inference_transport,
+        inference_endpoint,
+    )
+
+    if args.task_id is None:
+        task_ids = range(num_tasks_in_suite)
+    else:
+        if not 0 <= args.task_id < num_tasks_in_suite:
+            raise ValueError(f"task_id must be in [0, {num_tasks_in_suite - 1}], got {args.task_id}")
+        task_ids = [args.task_id]
+
+    display = None
+    if args.display:
+        import cv2
+
+        display = cv2
 
     # Start evaluation
     total_episodes, total_successes = 0, 0
-    for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
+    for task_id in tqdm.tqdm(task_ids):
         # Get task
         task = task_suite.get_task(task_id)
 
@@ -94,13 +131,30 @@ def eval_libero(args: Args) -> None:
             action_plan = collections.deque()
 
             # Set initial states
-            obs = env.set_init_state(initial_states[episode_idx])
+            obs = env.set_init_state(initial_states[episode_idx % len(initial_states)])
 
             # Setup
             t = 0
             replay_images = []
+            done = False
+            episode_error = None
+            recorder = EpisodeRecorder(
+                args.episode_out_path,
+                task_suite=args.task_suite_name,
+                task_id=task_id,
+                trial_id=episode_idx,
+                instruction=str(task_description),
+                control_hz=20,
+                replan_steps=args.replan_steps,
+                server_metadata=client.get_server_metadata(),
+                inference_backend=inference_backend,
+                inference_transport=inference_transport,
+                inference_endpoint=inference_endpoint,
+            )
+            chunk_id = -1
+            chunk_step = 0
 
-            logging.info(f"Starting episode {task_episodes+1}...")
+            logging.info(f"Starting episode {task_episodes + 1}...")
             while t < max_steps + args.num_steps_wait:
                 try:
                     # IMPORTANT: Do nothing for the first few timesteps because the simulator drops objects
@@ -114,6 +168,7 @@ def eval_libero(args: Args) -> None:
                     # IMPORTANT: rotate 180 degrees to match train preprocessing
                     img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
                     wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
+                    mujoco_img = np.ascontiguousarray(obs.get("frontview_image", obs["agentview_image"])[::-1, ::-1])
                     img = image_tools.convert_to_uint8(
                         image_tools.resize_with_pad(img, args.resize_size, args.resize_size)
                     )
@@ -123,42 +178,87 @@ def eval_libero(args: Args) -> None:
 
                     # Save preprocessed image for replay video
                     replay_images.append(img)
+                    if display is not None:
+                        display.imshow("OpenPI - Franka Panda (LIBERO)", display.cvtColor(img, display.COLOR_RGB2BGR))
+                        if display.waitKey(1) & 0xFF in (27, ord("q")):
+                            logging.info("Preview stopped from the display window")
+                            break
 
+                    policy_input_state = np.concatenate(
+                        (
+                            obs["robot0_eef_pos"],
+                            _quat2axisangle(obs["robot0_eef_quat"]),
+                            obs["robot0_gripper_qpos"],
+                        )
+                    )
                     if not action_plan:
                         # Finished executing previous action chunk -- compute new chunk
                         # Prepare observations dict
                         element = {
                             "observation/image": img,
                             "observation/wrist_image": wrist_img,
-                            "observation/state": np.concatenate(
-                                (
-                                    obs["robot0_eef_pos"],
-                                    _quat2axisangle(obs["robot0_eef_quat"]),
-                                    obs["robot0_gripper_qpos"],
-                                )
-                            ),
+                            "observation/state": policy_input_state,
                             "prompt": str(task_description),
                         }
+                        if args.record_debug_trace:
+                            element["_openpi_debug"] = True
 
                         # Query model to get action
-                        action_chunk = client.infer(element)["actions"]
-                        assert (
-                            len(action_chunk) >= args.replan_steps
-                        ), f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
+                        inference_start = time.perf_counter()
+                        policy_result = client.infer(element)
+                        inference_ms = (time.perf_counter() - inference_start) * 1000
+                        action_chunk = policy_result["actions"]
+                        assert len(action_chunk) >= args.replan_steps, (
+                            f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
+                        )
                         action_plan.extend(action_chunk[: args.replan_steps])
+                        chunk_id += 1
+                        chunk_step = 0
+                        new_action_chunk = np.asarray(action_chunk)
+                        server_timing = policy_result.get("server_timing", {})
+                        policy_timing = policy_result.get("policy_timing", {})
+                        debug_trace = policy_result.get("debug_trace")
+                    else:
+                        inference_ms = None
+                        new_action_chunk = None
+                        server_timing = None
+                        policy_timing = None
+                        debug_trace = None
 
                     action = action_plan.popleft()
 
                     # Execute action in environment
+                    input_obs = obs
                     obs, reward, done, info = env.step(action.tolist())
+                    recorder.record(
+                        step=len(replay_images) - 1,
+                        observation=input_obs,
+                        policy_input_state=policy_input_state,
+                        prompt=str(task_description),
+                        mujoco_frame=mujoco_img,
+                        agent_frame=img,
+                        wrist_frame=wrist_img,
+                        executed_action=np.asarray(action),
+                        chunk_id=chunk_id,
+                        chunk_step=chunk_step,
+                        action_chunk=new_action_chunk,
+                        inference_ms=inference_ms,
+                        server_timing=server_timing,
+                        policy_timing=policy_timing,
+                        debug_trace=debug_trace,
+                        reward=reward,
+                        done=done,
+                    )
+                    chunk_step += 1
                     if done:
                         task_successes += 1
                         total_successes += 1
                         break
                     t += 1
 
-                except Exception as e:
-                    logging.error(f"Caught exception: {e}")
+                except Exception as error:
+                    episode_error = str(error)
+                    logging.error(f"Caught exception: {error}")
                     break
 
             task_episodes += 1
@@ -167,11 +267,16 @@ def eval_libero(args: Args) -> None:
             # Save a replay video of the episode
             suffix = "success" if done else "failure"
             task_segment = task_description.replace(" ", "_")
-            imageio.mimwrite(
-                pathlib.Path(args.video_out_path) / f"rollout_{task_segment}_{suffix}.mp4",
-                [np.asarray(x) for x in replay_images],
-                fps=10,
-            )
+            if replay_images:
+                video_path = (
+                    pathlib.Path(args.video_out_path)
+                    / f"rollout_{task_id:03d}_{episode_idx:02d}_{task_segment}_{suffix}.mp4"
+                )
+                imageio.mimwrite(video_path, [np.asarray(x) for x in replay_images], fps=10)
+                logging.info(f"Saved rollout video to {video_path}")
+
+            episode_path = recorder.finalize(success=done, error=episode_error)
+            logging.info(f"Saved synchronized episode to {episode_path}")
 
             # Log current results
             logging.info(f"Success: {done}")
@@ -181,16 +286,34 @@ def eval_libero(args: Args) -> None:
         # Log final results
         logging.info(f"Current task success rate: {float(task_successes) / float(task_episodes)}")
         logging.info(f"Current total success rate: {float(total_successes) / float(total_episodes)}")
+        env.close()
 
+    if display is not None:
+        display.destroyAllWindows()
     logging.info(f"Total success rate: {float(total_successes) / float(total_episodes)}")
     logging.info(f"Total episodes: {total_episodes}")
+
+
+def _create_policy_client(args: Args) -> _websocket_client_policy.WebsocketClientPolicy:
+    if args.modal_endpoint:
+        return _websocket_client_policy.WebsocketClientPolicy.from_modal(endpoint=args.modal_endpoint)
+    return _websocket_client_policy.WebsocketClientPolicy(args.host, args.port)
+
+
+def _inference_backend(args: Args) -> Literal["local", "modal", "vm"]:
+    return "modal" if args.modal_endpoint else args.inference_backend
 
 
 def _get_libero_env(task, resolution, seed):
     """Initializes and returns the LIBERO environment, along with the task description."""
     task_description = task.language
     task_bddl_file = pathlib.Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
-    env_args = {"bddl_file_name": task_bddl_file, "camera_heights": resolution, "camera_widths": resolution}
+    env_args = {
+        "bddl_file_name": task_bddl_file,
+        "camera_names": ["frontview", "agentview", "robot0_eye_in_hand"],
+        "camera_heights": resolution,
+        "camera_widths": resolution,
+    }
     env = OffScreenRenderEnv(**env_args)
     env.seed(seed)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     return env, task_description

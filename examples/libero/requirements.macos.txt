@@ -1,0 +1,19 @@
+# CPU-only simulator/client dependencies for Apple Silicon and Linux containers.
+bddl==1.0.1
+cloudpickle>=2.1.0
+easydict>=1.9
+future>=0.18.2
+gym==0.26.2
+imageio[ffmpeg]>=2.36.1
+matplotlib>=3.8
+msgpack>=1.0.5
+mujoco==2.3.7
+numpy==1.26.4
+opencv-python-headless>=4.10
+pillow>=9.0.0
+PyYAML>=6.0
+robosuite==1.4.1
+tqdm>=4.66
+typing-extensions>=4.7.0
+tyro>=0.9
+websockets>=15.0

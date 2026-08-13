@@ -115,6 +115,8 @@ We provide detailed step-by-step examples for running inference of our pre-train
 
 **Remote Inference**: We provide [examples and code](docs/remote_inference.md) for running inference of our models **remotely**: the model can run on a different server and stream actions to the robot via a websocket connection. This makes it easy to use more powerful GPUs off-robot and keep robot and policy environments separate.
 
+**Modal**: This fork also includes a [Modal deployment guide](docs/modal.md) for running the GPU policy server as an authenticated cloud WebSocket while keeping only `openpi-client` on the robot computer.
+
 **Test inference without a robot**: We provide a [script](examples/simple_client/README.md) for testing inference without a robot. This script will generate a random observation and run inference with the model. See [here](examples/simple_client/README.md) for more details.
 
 
